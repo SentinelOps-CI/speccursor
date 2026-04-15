@@ -1,13 +1,18 @@
+<div align="center">
+
 # SpecCursor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code Coverage](https://codecov.io/gh/speccursor/speccursor/branch/main/graph/badge.svg)](https://codecov.io/gh/speccursor/speccursor)
 [![Security](https://img.shields.io/badge/Security-Snyk-green.svg)](https://snyk.io/test/github/speccursor/speccursor)
 [![Docker](https://img.shields.io/badge/Docker-GHCR-blue.svg)](https://github.com/orgs/speccursor/packages)
 [![Lean](https://img.shields.io/badge/Lean-4.20.0-orange.svg)](https://leanprover.github.io/)
 [![Claude](https://img.shields.io/badge/Claude-Sonnet%204-purple.svg)](https://anthropic.com/claude)
 
 > Autonomous dependency upgrades, AI-powered regression patches, and formal verification using Lean 4.20.0
+
+</div>
+
+---
 
 ## Overview
 
