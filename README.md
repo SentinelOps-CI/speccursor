@@ -12,15 +12,17 @@
 
 </div>
 
+<p align="center">
+  <img src=".github/assets/speccursor.png" alt="SpecCursor Logo" width="200"/>
+</p>
+
 ---
 
 ## Overview
 
 SpecCursor is a GitHub App that autonomously upgrades dependencies, patches regressions using AI, and proves invariants using Lean 4.20.0. It provides a complete solution for maintaining software dependencies with confidence through formal verification.
 
-<p align="center">
-  <img src=".github/assets/speccursor.png" alt="SpecCursor Logo" width="200"/>
-</p>
+
 
 ### Key Features
 
