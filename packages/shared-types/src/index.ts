@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+export {
+  ALLOWED_ECOSYSTEMS,
+  isAllowedEcosystem,
+  type AllowedEcosystem,
+} from './ecosystem';
+
 // ============================================================================
 // Domain Models
 // ============================================================================
