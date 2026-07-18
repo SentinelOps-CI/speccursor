@@ -1,7 +1,6 @@
-use crate::lib::{UpgradeWorker, UpgradeRequest, WorkerConfig};
-use actix_web::{web, App, HttpServer, HttpResponse, Responder};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde_json::json;
-use std::collections::HashMap;
+use speccursor_rust_worker::{UpgradeRequest, UpgradeWorker, WorkerConfig};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -45,7 +44,7 @@ async fn process_upgrade(
         Err(e) => HttpResponse::BadRequest().json(json!({
             "error": e.to_string(),
             "error_type": format!("{:?}", e.error_type)
-        }))
+        })),
     }
 }
 
@@ -67,10 +66,8 @@ mod tests {
 
     #[actix_web::test]
     async fn test_health_check() {
-        let app = test::init_service(
-            App::new()
-                .route("/health", web::get().to(health_check))
-        ).await;
+        let app =
+            test::init_service(App::new().route("/health", web::get().to(health_check))).await;
 
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
@@ -91,8 +88,9 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(worker))
-                .route("/upgrade", web::post().to(process_upgrade))
-        ).await;
+                .route("/upgrade", web::post().to(process_upgrade)),
+        )
+        .await;
 
         let request = UpgradeRequest {
             repository: "test/repo".to_string(),
@@ -114,14 +112,11 @@ mod tests {
 
     #[actix_web::test]
     async fn test_metrics() {
-        let app = test::init_service(
-            App::new()
-                .route("/metrics", web::get().to(metrics))
-        ).await;
+        let app = test::init_service(App::new().route("/metrics", web::get().to(metrics))).await;
 
         let req = test::TestRequest::get().uri("/metrics").to_request();
         let resp = test::call_service(&app, req).await;
 
         assert!(resp.status().is_success());
     }
-} 
+}

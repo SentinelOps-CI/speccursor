@@ -1,69 +1,12 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "allowJs": true,
-    "checkJs": false,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "strict": true,
-    "noImplicitAny": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "noImplicitThis": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "exactOptionalPropertyTypes": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "baseUrl": ".",
-    "paths": {
-      "@speccursor/shared-types": ["packages/shared-types/src"],
-      "@speccursor/shared-utils": ["packages/shared-utils/src"],
-      "@speccursor/shared-config": ["packages/shared-config/src"],
-      "@speccursor/github-app": ["apps/github-app/src"],
-      "@speccursor/controller": ["apps/controller/src"],
-      "@speccursor/ai-service": ["apps/ai-service/src"],
-      "@speccursor/rust-worker": ["workers/rust-worker/src"],
-      "@speccursor/lean-engine": ["workers/lean-engine/src"]
-    }
-  },
-  "include": [
-    "src/**/*",
-    "apps/*/src/**/*",
-    "packages/*/src/**/*",
-    "workers/*/src/**/*",
-    "tools/*/src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "**/*.test.ts",
-    "**/*.spec.ts",
-    "**/*.d.ts"
-  ],
+  "extends": "./tsconfig.base.json",
+  "files": [],
   "references": [
-    { "path": "./apps/github-app" },
-    { "path": "./apps/controller" },
-    { "path": "./apps/ai-service" },
     { "path": "./packages/shared-types" },
     { "path": "./packages/shared-utils" },
     { "path": "./packages/shared-config" },
-    { "path": "./workers/rust-worker" },
-    { "path": "./workers/lean-engine" }
+    { "path": "./apps/github-app" },
+    { "path": "./apps/controller" },
+    { "path": "./apps/ai-service" }
   ]
 }

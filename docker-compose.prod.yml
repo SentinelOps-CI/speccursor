@@ -1,0 +1,167 @@
+# Production overlay — hardened control-plane on Docker Compose.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Intended for a dedicated host or VM you control. For EKS/AWS observability,
+# see terraform/observability/. This file does not create cloud accounts.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:-speccursor}
+      POSTGRES_DB: ${POSTGRES_DB:-speccursor}
+    # Bind only to loopback on the host (not the LAN).
+    ports:
+      - '127.0.0.1:${POSTGRES_PUBLISH_PORT:-5432}:5432'
+    restart: always
+
+  redis:
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.production}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.production}
+    ports:
+      - '127.0.0.1:${REDIS_PUBLISH_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  prometheus:
+    profiles: ['observability']
+  grafana:
+    profiles: ['observability']
+  loki:
+    profiles: ['observability']
+  jaeger:
+    profiles: ['observability']
+  mailhog:
+    profiles: ['devtools']
+  lean-dev:
+    profiles: ['devtools']
+
+  controller:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: controller
+    image: speccursor-controller:${IMAGE_TAG:-prod}
+    container_name: speccursor-controller
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+    ports:
+      - '${CONTROLLER_PORT:-3001}:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    networks:
+      - default
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: ai-service
+    image: speccursor-ai-service:${IMAGE_TAG:-prod}
+    container_name: speccursor-ai-service
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      PORT: 3002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+    ports:
+      - '${AI_SERVICE_PORT:-3002}:3002'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    networks:
+      - default
+
+  github-app:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: github-app
+    image: speccursor-github-app:${IMAGE_TAG:-prod}
+    container_name: speccursor-github-app
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+    ports:
+      - '${GITHUB_APP_PORT:-3080}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    networks:
+      - default

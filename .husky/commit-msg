@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-# Check conventional commit format
-npx --no -- commitlint --edit $1 
+# Use the workspace binary so commit-msg does not hit the network via npx
+pnpm exec commitlint --edit "$1"

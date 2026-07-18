@@ -85,6 +85,7 @@ impl fmt::Display for UpgradeError {
 
 impl Error for UpgradeError {}
 
+#[derive(Clone)]
 pub struct UpgradeWorker {
     config: WorkerConfig,
 }
@@ -115,7 +116,10 @@ impl UpgradeWorker {
         }
     }
 
-    pub async fn process_upgrade(&self, request: UpgradeRequest) -> Result<UpgradeResponse, UpgradeError> {
+    pub async fn process_upgrade(
+        &self,
+        request: UpgradeRequest,
+    ) -> Result<UpgradeResponse, UpgradeError> {
         // Validate input
         self.validate_request(&request)?;
 
@@ -191,7 +195,7 @@ impl UpgradeWorker {
     fn assess_compatibility(&self, request: &UpgradeRequest) -> Result<f64, UpgradeError> {
         // Simulate compatibility assessment
         let base_score = 0.8;
-        
+
         // Adjust based on ecosystem
         let ecosystem_multiplier = match request.ecosystem.as_str() {
             "npm" => 1.0,
@@ -201,7 +205,7 @@ impl UpgradeWorker {
             _ => 0.7,
         };
 
-        let final_score = base_score * ecosystem_multiplier;
+        let final_score: f64 = base_score * ecosystem_multiplier;
         Ok(final_score.min(1.0))
     }
 
@@ -237,7 +241,11 @@ impl UpgradeWorker {
         Ok(changes)
     }
 
-    fn assess_risk(&self, request: &UpgradeRequest, changes: &[Change]) -> Result<RiskAssessment, UpgradeError> {
+    fn assess_risk(
+        &self,
+        request: &UpgradeRequest,
+        changes: &[Change],
+    ) -> Result<RiskAssessment, UpgradeError> {
         let mut risk_level = RiskLevel::Low;
         let mut breaking_changes = false;
         let mut security_issues = Vec::new();
@@ -303,7 +311,7 @@ mod tests {
     #[test]
     fn test_version_validation() {
         let worker = UpgradeWorker::new(None);
-        
+
         assert!(worker.is_valid_version("1.0.0"));
         assert!(worker.is_valid_version("2.1.3"));
         assert!(worker.is_valid_version("0.5.10"));
@@ -315,7 +323,7 @@ mod tests {
     #[test]
     fn test_request_validation() {
         let worker = UpgradeWorker::new(None);
-        
+
         let valid_request = UpgradeRequest {
             repository: "test/repo".to_string(),
             ecosystem: "npm".to_string(),
@@ -342,7 +350,7 @@ mod tests {
     #[test]
     fn test_compatibility_assessment() {
         let worker = UpgradeWorker::new(None);
-        
+
         let request = UpgradeRequest {
             repository: "test/repo".to_string(),
             ecosystem: "npm".to_string(),
@@ -359,7 +367,7 @@ mod tests {
     #[test]
     fn test_major_version_jump_detection() {
         let worker = UpgradeWorker::new(None);
-        
+
         assert!(worker.is_major_version_jump("1.0.0", "2.0.0"));
         assert!(worker.is_major_version_jump("1.5.0", "2.0.0"));
         assert!(!worker.is_major_version_jump("1.0.0", "1.5.0"));
@@ -369,7 +377,7 @@ mod tests {
     #[test]
     fn test_vulnerability_detection() {
         let worker = UpgradeWorker::new(None);
-        
+
         assert!(worker.has_known_vulnerabilities("vulnerable-package", "1.0.0"));
         assert!(worker.has_known_vulnerabilities("normal-package", "0.0.0"));
         assert!(!worker.has_known_vulnerabilities("normal-package", "1.0.0"));
@@ -378,7 +386,7 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_processing() {
         let worker = UpgradeWorker::new(None);
-        
+
         let request = UpgradeRequest {
             repository: "test/repo".to_string(),
             ecosystem: "npm".to_string(),
@@ -389,9 +397,9 @@ mod tests {
         };
 
         let response = worker.process_upgrade(request).await.unwrap();
-        
+
         assert!(response.success);
         assert!(response.compatibility_score > 0.0);
         assert!(!response.changes.is_empty());
     }
-} 
+}

@@ -9,7 +9,11 @@ CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 -- Create schema
 CREATE SCHEMA IF NOT EXISTS speccursor;
 
--- Set search path
+-- Persist search_path so app pools resolve tables without schema prefixes.
+ALTER DATABASE speccursor SET search_path TO speccursor, public;
+ALTER ROLE speccursor SET search_path TO speccursor, public;
+
+-- Set search path for this init session
 SET search_path TO speccursor, public;
 
 -- Upgrades table
@@ -143,6 +147,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs(resource_type);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 
+CREATE INDEX IF NOT EXISTS idx_upgrades_status_created
+  ON upgrades(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_upgrades_ecosystem_created
+  ON upgrades(ecosystem, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_patches_status_created
+  ON ai_patches(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_patches_upgrade_created
+  ON ai_patches(upgrade_id, created_at DESC);
+
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -167,7 +180,7 @@ CREATE TRIGGER update_jobs_updated_at BEFORE UPDATE ON jobs
 
 -- Insert initial system configuration
 INSERT INTO system_config (key, value, description) VALUES
-('claude_api', '{"model": "claude-3-sonnet-20240229", "max_tokens": 4096, "temperature": 0.1}', 'Claude API configuration'),
+('claude_api', '{"model": "claude-sonnet-4-20250514", "max_tokens": 4096, "temperature": 0.1}', 'Claude Messages API configuration'),
 ('lean_engine', '{"version": "4.20.0", "timeout_seconds": 300, "memory_limit_mb": 2048}', 'Lean engine configuration'),
 ('security', '{"sandbox_enabled": true, "max_execution_time": 600, "memory_limit": "2GB"}', 'Security configuration'),
 ('monitoring', '{"metrics_enabled": true, "tracing_enabled": true, "log_level": "info"}', 'Monitoring configuration')

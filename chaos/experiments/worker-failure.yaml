@@ -1,54 +1,166 @@
+# SpecCursor Chaos Mesh experiments for worker resilience.
+# Apply only in a dedicated chaos-testing namespace against non-production clusters.
+# See docs/chaos.md for steady-state hypotheses, abort conditions, rollback, and staging runbook.
+#
+# Prerequisites:
+#   - Chaos Mesh installed (https://chaos-mesh.org)
+#   - Namespace chaos-testing for experiment CRs; targets live in namespace speccursor
+#   - Workers labeled app=speccursor-worker
+#   - Dependencies labeled app=speccursor-redis / app=speccursor-postgres for network targets
+#   - Observability scraping /metrics and control-plane /ready
+#
+# Prefer the one-shot Workflow in worker-resilience-workflow.yaml for gated staging drills.
+# These scheduled experiments are opt-in; pause immediately if abort conditions fire.
+
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
 metadata:
-  name: worker-failure-test
+  name: worker-pod-failure
   namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-pod-failure
+    chaos.speccursor.io/profile: scheduled
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      After recovery, Redis upgrade queue depth returns to pre-chaos baseline
+      within 5m; controller /ready stays HTTP 200; no unbounded redelivery storm.
+    chaos.speccursor.io/abort-if: >-
+      Queue depth grows for >5m after pod recovery; all worker replicas Unavailable;
+      controller /ready fails for >2m.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete podchaos worker-pod-failure;
+      verify workers Ready and drain queue.
+    chaos-mesh.org/description: >-
+      Kill one worker pod for 30s to verify queue consumers resume without
+      message loss (Redis list RPOP after ack / at-least-once processing).
 spec:
   action: pod-failure
   mode: one
-  value: ''
   duration: '30s'
+  gracePeriod: 0
   selector:
     namespaces:
       - speccursor
     labelSelectors:
       app: speccursor-worker
   scheduler:
-    cron: '@every 5m'
+    cron: '@every 30m'
 ---
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
 metadata:
   name: worker-network-delay
   namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-network-delay
+    chaos.speccursor.io/profile: scheduled
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      Redis client p99 latency recovers within 2m of experiment end;
+      controller and worker /ready remain healthy.
+    chaos.speccursor.io/abort-if: >-
+      Controller /ready stays unhealthy after experiment ends;
+      Redis connection pool exhaustion alerts fire.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete networkchaos worker-network-delay
+    chaos-mesh.org/description: >-
+      Inject 100ms +/- 20ms latency to exercise Redis/Postgres client timeouts
+      and retry budgets without stalling the control plane.
 spec:
   action: delay
   mode: one
-  value: ''
   delay:
     latency: '100ms'
-    correlation: '100'
-    jitter: '0ms'
+    correlation: '25'
+    jitter: '20ms'
   duration: '60s'
   selector:
     namespaces:
       - speccursor
     labelSelectors:
       app: speccursor-worker
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - speccursor
+      labelSelectors:
+        app: speccursor-redis
   scheduler:
-    cron: '@every 10m'
+    cron: '@every 45m'
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: worker-network-loss
+  namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-network-loss
+    chaos.speccursor.io/profile: scheduled
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      Upgrade rows remain idempotent (no duplicate completed upgrades for the
+      same natural key); Postgres pool recovers without manual restart.
+    chaos.speccursor.io/abort-if: >-
+      Duplicate upgrade rows or data corruption detected;
+      Postgres connection errors persist >3m after experiment end.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete networkchaos worker-network-loss
+    chaos-mesh.org/description: >-
+      5% packet loss toward Postgres to validate idempotent upgrade writes and
+      connection-pool recovery.
+spec:
+  action: loss
+  mode: one
+  loss:
+    loss: '5'
+    correlation: '25'
+  duration: '45s'
+  selector:
+    namespaces:
+      - speccursor
+    labelSelectors:
+      app: speccursor-worker
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - speccursor
+      labelSelectors:
+        app: speccursor-postgres
+  scheduler:
+    cron: '@every 60m'
 ---
 apiVersion: chaos-mesh.org/v1alpha1
 kind: StressChaos
 metadata:
   name: worker-memory-pressure
   namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-memory-pressure
+    chaos.speccursor.io/profile: scheduled
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      Memory pressure remains bounded to the selected worker; non-worker pods
+      on the node stay Ready; OOMKill (if any) is limited to the stressed pod.
+    chaos.speccursor.io/abort-if: >-
+      Node OOM affecting non-worker pods; kubelet NotReady; cluster autoscaler thrash.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete stresschaos worker-memory-pressure
+    chaos-mesh.org/description: >-
+      Apply bounded memory pressure so OOMKill policies and backpressure are
+      observable without exhausting the node.
 spec:
   mode: one
-  value: ''
   stressors:
     memory:
-      workers: 1
+      workers: 2
       size: '256MB'
   duration: '45s'
   selector:
@@ -57,4 +169,40 @@ spec:
     labelSelectors:
       app: speccursor-worker
   scheduler:
-    cron: '@every 15m'
+    cron: '@every 90m'
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: worker-cpu-pressure
+  namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-cpu-pressure
+    chaos.speccursor.io/profile: scheduled
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      Job latency SLOs degrade gracefully; other worker replicas absorb queue
+      depth; CPU returns to baseline within 2m after experiment end.
+    chaos.speccursor.io/abort-if: >-
+      All worker replicas unavailable; control-plane /ready fails;
+      node CPU soft-lockup alerts.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete stresschaos worker-cpu-pressure
+    chaos-mesh.org/description: >-
+      Saturate one worker CPU to confirm job latency SLOs degrade gracefully
+      and other replicas absorb queue depth.
+spec:
+  mode: one
+  stressors:
+    cpu:
+      workers: 2
+      load: 80
+  duration: '45s'
+  selector:
+    namespaces:
+      - speccursor
+    labelSelectors:
+      app: speccursor-worker
+  scheduler:
+    cron: '@every 90m'

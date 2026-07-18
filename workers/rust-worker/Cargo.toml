@@ -10,67 +10,14 @@ keywords = ["worker", "upgrades", "ecosystem", "sandbox"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-# Async runtime
-tokio = { version = "1.35", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-
-# HTTP client
-reqwest = { version = "0.11", features = ["json", "stream"] }
-hyper = { version = "1.0", features = ["full"] }
-
-# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# Database
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "redis", "chrono", "uuid"] }
-redis = { version = "0.23", features = ["tokio-comp"] }
-
-# Logging and observability
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-opentelemetry = { version = "0.21", features = ["rt-tokio"] }
-opentelemetry-jaeger = { version = "0.20", features = ["rt-tokio"] }
-prometheus = { version = "0.13", features = ["process"] }
-
-# Configuration
-config = "0.14"
-dotenv = "0.15"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Utilities
-uuid = { version = "1.6", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-regex = "1.10"
-clap = { version = "4.4", features = ["derive"] }
-
-# Process and file system
-tempfile = "3.8"
-which = "6.0"
-walkdir = "2.4"
-
-# Security and sandboxing
-seccomp = "0.1"
-libc = "0.2"
-
-# Compression and encoding
-flate2 = "1.0"
-base64 = "0.21"
-
-# HTTP server (for health checks)
-actix-web = "4.4"
-actix-rt = "2.9"
-
-# Testing
-mockall = "0.12"
-tempfile = "3.8"
+# Pin below actix-web 4.10+ so builds work on rustc 1.85 (common Docker Desktop rustup).
+actix-web = "=4.9.0"
+actix-rt = "=2.10.0"
 
 [dev-dependencies]
-tokio-test = "0.4"
-pretty_assertions = "1.4"
+tokio = { version = "1.35", features = ["macros", "rt"] }
 
 [profile.release]
 opt-level = 3
@@ -88,4 +35,4 @@ path = "src/main.rs"
 
 [lib]
 name = "speccursor_rust_worker"
-path = "src/lib.rs" 
+path = "src/lib.rs"

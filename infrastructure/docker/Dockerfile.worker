@@ -1,0 +1,23 @@
+# SpecCursor Rust worker image.
+# Build from repository root:
+#   docker build -f infrastructure/docker/Dockerfile.worker \
+#     -t speccursor-worker:local .
+
+ARG RUST_VERSION=1.88.0
+
+FROM rust:${RUST_VERSION}-bookworm AS builder
+WORKDIR /build
+COPY workers/rust-worker/Cargo.toml workers/rust-worker/Cargo.lock ./
+COPY workers/rust-worker/src ./src
+RUN cargo build --release --locked
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd --create-home --uid 10001 --shell /usr/sbin/nologin speccursor
+COPY --from=builder /build/target/release/speccursor-rust-worker /usr/local/bin/speccursor-rust-worker
+USER speccursor
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["speccursor-rust-worker"]

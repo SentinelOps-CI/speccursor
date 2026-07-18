@@ -105,6 +105,7 @@ Thumbs.db
 
 # Rust
 Cargo.lock
+!workers/rust-worker/Cargo.lock
 target/
 *.rlib
 *.rmeta

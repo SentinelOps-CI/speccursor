@@ -1,0 +1,57 @@
+# SpecCursor Node service image (monorepo).
+# Build from repository root:
+#   docker build -f infrastructure/docker/Dockerfile.service \
+#     --build-arg SERVICE=controller -t speccursor-controller:local .
+#
+# SERVICE must be one of: controller | ai-service | github-app
+
+ARG NODE_VERSION=20.19.0
+ARG PNPM_VERSION=8.15.0
+
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+ARG PNPM_VERSION
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
+  && corepack prepare pnpm@${PNPM_VERSION} --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
+COPY packages/shared-types/package.json packages/shared-types/
+COPY packages/shared-utils/package.json packages/shared-utils/
+COPY packages/shared-config/package.json packages/shared-config/
+COPY apps/controller/package.json apps/controller/
+COPY apps/ai-service/package.json apps/ai-service/
+COPY apps/github-app/package.json apps/github-app/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY packages packages
+COPY apps apps
+# Typecheck/build the selected service and its workspace deps (emit JS where configured).
+ARG SERVICE=controller
+RUN pnpm --filter "@speccursor/${SERVICE}..." run build
+
+FROM base AS runtime
+ARG SERVICE=controller
+ENV NODE_ENV=production \
+    APP_ENV=production \
+    SERVICE_NAME=${SERVICE} \
+    PORT=3000
+# Non-root
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin speccursor
+COPY --from=deps /app/node_modules /app/node_modules
+COPY --from=deps /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/
+COPY --from=build /app/packages /app/packages
+COPY --from=build /app/apps /app/apps
+# Root package.json already depends on tsx — used to run TypeScript workspace mains.
+RUN chown -R speccursor:speccursor /app
+USER speccursor
+WORKDIR /app/apps/${SERVICE}
+EXPOSE 3000 3001 3002
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["pnpm", "exec", "tsx", "src/index.ts"]

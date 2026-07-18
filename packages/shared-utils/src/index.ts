@@ -10,11 +10,7 @@ import {
   DatabaseConfig,
   RedisConfig,
   SpecCursorError,
-  ValidationError,
-  NotFoundError,
-  RateLimitError,
   Result,
-  AsyncResult,
   HealthCheck,
   Metric,
   AuditLog,
@@ -88,10 +84,18 @@ export class Database {
       database: config.database,
       user: config.username,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      // Prefer proper CA verification. Set DB_SSL_REJECT_UNAUTHORIZED=false only
+      // for local/dev TLS with self-signed certs — never as a production default.
+      ssl: config.ssl
+        ? {
+            rejectUnauthorized:
+              process.env['DB_SSL_REJECT_UNAUTHORIZED'] !== 'false',
+          }
+        : false,
       max: config.maxConnections,
       idleTimeoutMillis: config.idleTimeout * 1000,
       connectionTimeoutMillis: 10000,
+      options: '-c search_path=speccursor,public',
     };
 
     this.pool = new Pool(poolConfig);
@@ -121,7 +125,7 @@ export class Database {
     }
   }
 
-  async getClient(): Promise<Pool['connect']> {
+  async getClient() {
     return this.pool.connect();
   }
 
@@ -213,6 +217,26 @@ export class Redis {
       return await this.client.exists(key);
     } catch (error) {
       this.logger.error('Redis exists failed', error as Error, { key });
+      throw error;
+    }
+  }
+
+  /** Push a job onto a list-backed work queue (O(1)). */
+  async lPush(key: string, value: string): Promise<number> {
+    try {
+      return await this.client.lPush(key, value);
+    } catch (error) {
+      this.logger.error('Redis lPush failed', error as Error, { key });
+      throw error;
+    }
+  }
+
+  /** Pop the next job from a list-backed work queue (O(1)). */
+  async rPop(key: string): Promise<string | null> {
+    try {
+      return await this.client.rPop(key);
+    } catch (error) {
+      this.logger.error('Redis rPop failed', error as Error, { key });
       throw error;
     }
   }
@@ -336,10 +360,16 @@ export class SecurityUtils {
       .update(payload)
       .digest('hex');
 
-    return crypto.timingSafeEqual(
-      Buffer.from(signature, 'hex'),
-      Buffer.from(expectedSignature, 'hex')
-    );
+    try {
+      const provided = Buffer.from(signature, 'hex');
+      const expected = Buffer.from(expectedSignature, 'hex');
+      if (provided.length !== expected.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(provided, expected);
+    } catch {
+      return false;
+    }
   }
 
   static generateJWT(
@@ -382,14 +412,27 @@ export class SecurityUtils {
 
   static verifyJWT(token: string, secret: string): Record<string, any> | null {
     try {
-      const [headerB64, payloadB64, signature] = token.split('.');
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+      const headerB64 = parts[0]!;
+      const payloadB64 = parts[1]!;
+      const signature = parts[2]!;
 
       const expectedSignature = crypto
         .createHmac('sha256', secret)
         .update(`${headerB64}.${payloadB64}`)
         .digest('base64url');
 
-      if (signature !== expectedSignature) {
+      try {
+        const provided = Buffer.from(signature);
+        const expected = Buffer.from(expectedSignature);
+        if (
+          provided.length !== expected.length ||
+          !crypto.timingSafeEqual(provided, expected)
+        ) {
+          return null;
+        }
+      } catch {
         return null;
       }
 
@@ -402,7 +445,7 @@ export class SecurityUtils {
       }
 
       return payload;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -454,9 +497,40 @@ export class ValidationUtils {
 export class RateLimiter {
   private limits: Map<string, { count: number; resetTime: number }> = new Map();
   private logger: Logger;
+  private readonly maxKeys: number;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, maxKeys: number = 10_000) {
     this.logger = logger;
+    this.maxKeys = maxKeys;
+  }
+
+  /** Drop expired entries so the map stays O(active keys), not O(all historical). */
+  private prune(now: number): void {
+    if (this.limits.size < this.maxKeys) {
+      for (const [key, entry] of this.limits) {
+        if (now > entry.resetTime) {
+          this.limits.delete(key);
+        }
+      }
+      return;
+    }
+
+    for (const [key, entry] of this.limits) {
+      if (now > entry.resetTime) {
+        this.limits.delete(key);
+      }
+    }
+
+    // Hard cap: evict oldest reset windows if still over budget.
+    if (this.limits.size >= this.maxKeys) {
+      const sorted = [...this.limits.entries()].sort(
+        (a, b) => a[1].resetTime - b[1].resetTime
+      );
+      const toDrop = sorted.slice(0, Math.ceil(this.maxKeys * 0.1));
+      for (const [key] of toDrop) {
+        this.limits.delete(key);
+      }
+    }
   }
 
   async checkLimit(
@@ -465,6 +539,7 @@ export class RateLimiter {
     windowMs: number
   ): Promise<boolean> {
     const now = Date.now();
+    this.prune(now);
     const current = this.limits.get(key);
 
     if (!current || now > current.resetTime) {
@@ -481,12 +556,15 @@ export class RateLimiter {
     return true;
   }
 
-  async getRemaining(key: string): Promise<number> {
+  async getRemaining(
+    key: string,
+    limit: number = Number.MAX_SAFE_INTEGER
+  ): Promise<number> {
     const current = this.limits.get(key);
     if (!current || Date.now() > current.resetTime) {
-      return 0;
+      return limit;
     }
-    return Math.max(0, current.count);
+    return Math.max(0, limit - current.count);
   }
 }
 
@@ -497,9 +575,28 @@ export class RateLimiter {
 export class MetricsCollector {
   private metrics: Map<string, Metric> = new Map();
   private logger: Logger;
+  private readonly maxSeries: number;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, maxSeries: number = 5_000) {
     this.logger = logger;
+    this.maxSeries = maxSeries;
+  }
+
+  private ensureCapacity(): void {
+    if (this.metrics.size < this.maxSeries) return;
+    // Evict oldest series (by timestamp) in O(n log n) only when over cap.
+    const oldest = [...this.metrics.entries()].sort(
+      (a, b) => a[1].timestamp.getTime() - b[1].timestamp.getTime()
+    );
+    const dropCount = Math.ceil(this.maxSeries * 0.1);
+    for (let i = 0; i < dropCount; i++) {
+      const entry = oldest[i];
+      if (entry) this.metrics.delete(entry[0]);
+    }
+    this.logger.warn('Metrics series cap reached; evicted oldest series', {
+      maxSeries: this.maxSeries,
+      dropped: dropCount,
+    });
   }
 
   recordCounter(
@@ -512,7 +609,9 @@ export class MetricsCollector {
 
     if (existing && existing.type === 'counter') {
       existing.value += value;
+      existing.timestamp = new Date();
     } else {
+      this.ensureCapacity();
       this.metrics.set(key, {
         name,
         value,
@@ -529,6 +628,7 @@ export class MetricsCollector {
     labels: Record<string, string> = {}
   ): void {
     const key = this.getMetricKey(name, labels);
+    if (!this.metrics.has(key)) this.ensureCapacity();
     this.metrics.set(key, {
       name,
       value,
@@ -547,17 +647,22 @@ export class MetricsCollector {
     const existing = this.metrics.get(key);
 
     if (existing && existing.type === 'histogram') {
-      // For simplicity, we'll just track the latest value
-      existing.value = value;
+      // Running mean approximation — O(1) per observation, not O(n) sample storage.
+      const n = (existing as Metric & { _n?: number })._n ?? 1;
+      existing.value = (existing.value * n + value) / (n + 1);
+      (existing as Metric & { _n?: number })._n = n + 1;
       existing.timestamp = new Date();
     } else {
-      this.metrics.set(key, {
+      this.ensureCapacity();
+      const metric: Metric & { _n?: number } = {
         name,
         value,
         type: 'histogram',
         labels,
         timestamp: new Date(),
-      });
+      };
+      metric._n = 1;
+      this.metrics.set(key, metric);
     }
   }
 
@@ -627,31 +732,30 @@ export class HealthChecker {
   }
 
   async performHealthCheck(): Promise<HealthCheck> {
-    const startTime = Date.now();
     const checks: Record<
       string,
       { status: 'healthy' | 'unhealthy'; message?: string; duration?: number }
     > = {};
 
-    for (const [name, check] of this.checks) {
-      const checkStart = Date.now();
-      try {
-        const isHealthy = await check();
-        const duration = Date.now() - checkStart;
-
-        checks[name] = {
-          status: isHealthy ? 'healthy' : 'unhealthy',
-          duration,
-        };
-      } catch (error) {
-        const duration = Date.now() - checkStart;
-        checks[name] = {
-          status: 'unhealthy',
-          message: (error as Error).message,
-          duration,
-        };
-      }
-    }
+    // Run dependency probes in parallel — O(slowest) instead of O(sum).
+    await Promise.all(
+      [...this.checks.entries()].map(async ([name, check]) => {
+        const checkStart = Date.now();
+        try {
+          const isHealthy = await check();
+          checks[name] = {
+            status: isHealthy ? 'healthy' : 'unhealthy',
+            duration: Date.now() - checkStart,
+          };
+        } catch (error) {
+          checks[name] = {
+            status: 'unhealthy',
+            message: (error as Error).message,
+            duration: Date.now() - checkStart,
+          };
+        }
+      })
+    );
 
     const overallStatus = Object.values(checks).every(
       c => c.status === 'healthy'
@@ -665,7 +769,7 @@ export class HealthChecker {
       status: overallStatus,
       timestamp: new Date(),
       version: process.env.npm_package_version || '0.1.0',
-      uptime: Date.now() - startTime,
+      uptime: Math.floor(process.uptime() * 1000),
       checks,
     };
   }
@@ -729,30 +833,22 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function retry<T>(
+export async function retry<T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
   delay: number = 1000
 ): Promise<T> {
-  return new Promise((resolve, reject) => {
-    let attempts = 0;
-
-    const attempt = async () => {
-      try {
-        attempts++;
-        const result = await operation();
-        resolve(result);
-      } catch (error) {
-        if (attempts >= maxRetries) {
-          reject(error);
-        } else {
-          setTimeout(attempt, delay * attempts);
-        }
-      }
-    };
-
-    attempt();
-  });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries) break;
+      await sleep(delay * attempt);
+    }
+  }
+  throw lastError;
 }
 
 export function debounce<T extends (...args: any[]) => any>(
@@ -784,6 +880,14 @@ export function throttle<T extends (...args: any[]) => any>(
 // Configuration Loading
 // ============================================================================
 
+export { createHttpKernel, listenAndServe, asyncHandler } from './http-kernel';
+export type {
+  HttpKernel,
+  HttpKernelOptions,
+  HttpLogger,
+  ListenOptions,
+} from './http-kernel';
+
 export function loadConfig(): AppConfig {
   const config: AppConfig = {
     port: parseInt(process.env.PORT || '3000'),
@@ -806,8 +910,8 @@ export function loadConfig(): AppConfig {
       keyPrefix: process.env.REDIS_KEY_PREFIX || 'speccursor:',
     },
     claude: {
-      apiKey: process.env.CLAUDE_API_KEY || '',
-      model: process.env.CLAUDE_MODEL || 'claude-3-sonnet-20240229',
+      apiKey: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || '',
+      model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
       maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '4096'),
       temperature: parseFloat(process.env.CLAUDE_TEMPERATURE || '0.1'),
       timeout: parseInt(process.env.CLAUDE_TIMEOUT || '30000'),

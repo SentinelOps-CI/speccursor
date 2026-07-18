@@ -3,7 +3,8 @@ import 'dotenv/config';
 
 // Mock environment variables for testing
 process.env.NODE_ENV = 'test';
-process.env.APP_ENV = 'test';
+// Convict deploy profile is development|staging|production (not test).
+process.env.APP_ENV = 'development';
 
 // Global test timeout
 jest.setTimeout(10000);

@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: speccursor
+  labels:
+    app: speccursor-redis
+    app.kubernetes.io/part-of: speccursor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speccursor-redis
+  template:
+    metadata:
+      labels:
+        app: speccursor-redis
+        app.kubernetes.io/part-of: speccursor
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: speccursor-secrets
+                  key: REDIS_PASSWORD
+          ports:
+            - containerPort: 6379
+              name: redis
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG'
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG'
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: speccursor
+  labels:
+    app: speccursor-redis
+    app.kubernetes.io/part-of: speccursor
+spec:
+  selector:
+    app: speccursor-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
