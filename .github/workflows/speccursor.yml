@@ -1,659 +1,90 @@
-name: SpecCursor CI/CD Pipeline
+name: SpecCursor CI
+
+# Fast primary gate for PRs and main. Extended qualification lives in qualify.yml.
 
 on:
   push:
     branches: [main, develop]
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'workers/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'package.json'
-      - 'pnpm-workspace.yaml'
-      - 'Cargo.toml'
-      - 'lakefile.lean'
-      - 'go.mod'
-      - 'requirements.txt'
-      - 'Dockerfile'
   pull_request:
     branches: [main, develop]
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'workers/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'package.json'
-      - 'pnpm-workspace.yaml'
-      - 'Cargo.toml'
-      - 'lakefile.lean'
-      - 'go.mod'
-      - 'requirements.txt'
-      - 'Dockerfile'
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
-      force_deploy:
-        description: 'Force deployment even if tests fail'
-        required: false
-        default: false
-        type: boolean
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  PNPM_VERSION: '8.15.0'
+  NODE_ENV: test
 
 jobs:
-  # Code Quality & Security
-  code-quality:
-    name: Code Quality & Security
+  quality:
+    name: Verify, type-check, test, audit
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 25
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          cache: pnpm
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - name: Install
+        run: pnpm install --frozen-lockfile
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+      - name: Architecture verification
+        run: node verify-implementation.js
 
-      - name: Setup Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.21'
-
-      - name: Setup Lean
-        uses: leanprover/lean4@v2
-        with:
-          lean-version: '4.20.0'
-
-      - name: Install pnpm
-        run: npm install -g pnpm@latest
-
-      - name: Install dependencies
-        run: |
-          pnpm install --frozen-lockfile
-          if [ -f "Cargo.toml" ]; then cargo fetch; fi
-          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
-          if [ -f "go.mod" ]; then go mod download; fi
-
-      - name: Run ESLint
-        run: pnpm lint
-
-      - name: Run Prettier check
+      - name: Format
         run: pnpm format:check
 
-      - name: Run TypeScript type check
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
         run: pnpm type-check
 
-      - name: Run Rust clippy
-        run: |
-          if [ -f "Cargo.toml" ]; then
-            cargo clippy --all-targets --all-features -- -D warnings
-          fi
+      - name: Unit and integration tests
+        run: pnpm test:unit
 
-      - name: Run Go lint
-        run: |
-          if [ -f "go.mod" ]; then
-            golangci-lint run
-          fi
-
-      - name: Run Python lint
-        run: |
-          if [ -f "requirements.txt" ]; then
-            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-            black --check .
-            isort --check-only .
-          fi
-
-      - name: Run Lean check
-        run: |
-          if [ -f "lakefile.lean" ]; then
-            lake build
-            lake exe cache get
-            leanchecker lean/speccursor.lean
-          fi
-
-      - name: Run security audit
+      - name: Security audit
         run: |
           pnpm audit --audit-level moderate
-          if [ -f "Cargo.toml" ]; then cargo audit; fi
-          if [ -f "requirements.txt" ]; then safety check; fi
+          node scripts/security-audit.mjs
 
-      - name: Run Snyk security scan
-        uses: snyk/actions/node@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Unit Tests
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      matrix:
-        ecosystem: [node, rust, python, go, lean]
-        include:
-          - ecosystem: node
-            test-command: pnpm test
-            coverage-command: pnpm test:coverage
-          - ecosystem: rust
-            test-command: cargo test
-            coverage-command: cargo tarpaulin --out Html
-          - ecosystem: python
-            test-command: python -m pytest
-            coverage-command: python -m pytest --cov=. --cov-report=html
-          - ecosystem: go
-            test-command: go test ./...
-            coverage-command: go test -coverprofile=coverage.out ./...
-          - ecosystem: lean
-            test-command: lake env lean --run lean/test_runner.lean
-            coverage-command: echo "Lean coverage not supported"
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup ${{ matrix.ecosystem }}
-        uses: actions/setup-node@v4
-        if: matrix.ecosystem == 'node'
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Setup ${{ matrix.ecosystem }}
-        uses: actions-rs/toolchain@v1
-        if: matrix.ecosystem == 'rust'
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Setup ${{ matrix.ecosystem }}
-        uses: actions/setup-python@v4
-        if: matrix.ecosystem == 'python'
-        with:
-          python-version: '3.11'
-
-      - name: Setup ${{ matrix.ecosystem }}
-        uses: actions/setup-go@v4
-        if: matrix.ecosystem == 'go'
-        with:
-          go-version: '1.21'
-
-      - name: Setup ${{ matrix.ecosystem }}
-        uses: leanprover/lean4@v2
-        if: matrix.ecosystem == 'lean'
-        with:
-          lean-version: '4.20.0'
-
-      - name: Install dependencies
-        run: |
-          if [ "${{ matrix.ecosystem }}" = "node" ]; then
-            npm install -g pnpm@latest
-            pnpm install --frozen-lockfile
-          elif [ "${{ matrix.ecosystem }}" = "rust" ]; then
-            cargo fetch
-          elif [ "${{ matrix.ecosystem }}" = "python" ]; then
-            pip install -r requirements.txt
-          elif [ "${{ matrix.ecosystem }}" = "go" ]; then
-            go mod download
-          elif [ "${{ matrix.ecosystem }}" = "lean" ]; then
-            lake build
-          fi
-
-      - name: Run tests
-        run: ${{ matrix.test-command }}
-        timeout-minutes: 30
-
-      - name: Generate coverage
-        run: ${{ matrix.coverage-command }}
-        if: matrix.ecosystem != 'lean'
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        if: matrix.ecosystem != 'lean'
-        with:
-          file: ./coverage/lcov.info
-          flags: ${{ matrix.ecosystem }}
-          name: ${{ matrix.ecosystem }}-coverage
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results-${{ matrix.ecosystem }}
-          path: |
-            coverage/
-            test-results.json
-            *.xml
-
-  # Integration Tests
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: unit-tests
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: speccursor_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: |
-          npm install -g pnpm@latest
-          pnpm install --frozen-lockfile
-
-      - name: Run integration tests
-        run: pnpm test:integration
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/speccursor_test
-          REDIS_URL: redis://localhost:6379
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MORPH_API_KEY: ${{ secrets.MORPH_API_KEY }}
-
-      - name: Upload integration test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: integration-test-results
-          path: |
-            integration-test-results/
-            coverage/
-
-  # End-to-End Tests
-  e2e-tests:
-    name: End-to-End Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    needs: integration-tests
-    strategy:
-      matrix:
-        scenario: [basic-upgrade, ai-patch, formal-proof, full-workflow]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      - name: Setup Lean
-        uses: leanprover/lean4@v2
-        with:
-          lean-version: '4.20.0'
-
-      - name: Install dependencies
-        run: |
-          npm install -g pnpm@latest
-          pnpm install --frozen-lockfile
-          if [ -f "Cargo.toml" ]; then cargo fetch; fi
-          if [ -f "lakefile.lean" ]; then lake build; fi
-
-      - name: Run E2E test scenario
-        run: pnpm test:e2e --scenario ${{ matrix.scenario }}
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MORPH_API_KEY: ${{ secrets.MORPH_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload E2E test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: e2e-test-results-${{ matrix.scenario }}
-          path: |
-            e2e-test-results/
-            screenshots/
-
-  # Build & Package
-  build:
-    name: Build & Package
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [unit-tests, integration-tests]
-    strategy:
-      matrix:
-        include:
-          - name: github-app
-            path: apps/github-app
-            dockerfile: apps/github-app/Dockerfile
-          - name: controller
-            path: apps/controller
-            dockerfile: apps/controller/Dockerfile
-          - name: ai-service
-            path: apps/ai-service
-            dockerfile: apps/ai-service/Dockerfile
-          - name: rust-worker
-            path: workers/rust-worker
-            dockerfile: workers/rust-worker/Dockerfile
-          - name: lean-engine
-            path: workers/lean-engine
-            dockerfile: workers/lean-engine/Dockerfile
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.name }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ matrix.path }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.name }}:${{ github.sha }}
-          format: spdx-json
-          output-file: sbom-${{ matrix.name }}.json
-
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-${{ matrix.name }}
-          path: sbom-${{ matrix.name }}.json
-
-      - name: Sign image with Sigstore
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: 'v2.1.1'
-
-      - name: Sign the published container image
-        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.name }}@${{ steps.build.outputs.digest }}
-
-  # Deploy to Staging
-  deploy-staging:
-    name: Deploy to Staging
+  rust-worker:
+    name: Rust worker
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: build
-    environment: staging
-    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
-
+    if: hashFiles('workers/rust-worker/Cargo.toml') != ''
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          terraform_version: '1.5.0'
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
-
-      - name: Terraform Init
+          toolchain: stable
+          components: clippy
+      - name: Test and clippy
+        working-directory: workers/rust-worker
         run: |
-          cd terraform/staging
-          terraform init
+          cargo test --verbose
+          cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Terraform Plan
-        run: |
-          cd terraform/staging
-          terraform plan -var="image_tag=${{ github.sha }}" -out=tfplan
-
-      - name: Terraform Apply
-        run: |
-          cd terraform/staging
-          terraform apply -auto-approve tfplan
-
-      - name: Run smoke tests
-        run: |
-          # Wait for deployment to be ready
-          sleep 60
-          # Run smoke tests against staging environment
-          pnpm test:smoke --base-url ${{ steps.deploy.outputs.staging_url }}
-
-  # Deploy to Production
-  deploy-production:
-    name: Deploy to Production
+  lean-engine:
+    name: Lean engine
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [build, deploy-staging]
-    environment: production
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
+    if: hashFiles('workers/lean-engine/lakefile.lean') != ''
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform-version: '1.5.0'
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
-
-      - name: Terraform Init
+      - uses: actions/checkout@v4
+      - name: Install elan
         run: |
-          cd terraform/production
-          terraform init
-
-      - name: Terraform Plan
-        run: |
-          cd terraform/production
-          terraform plan -var="image_tag=${{ github.sha }}" -out=tfplan
-
-      - name: Terraform Apply
-        run: |
-          cd terraform/production
-          terraform apply -auto-approve tfplan
-
-      - name: Run production health checks
-        run: |
-          # Wait for deployment to be ready
-          sleep 120
-          # Run comprehensive health checks
-          pnpm test:health --base-url ${{ steps.deploy.outputs.production_url }}
-
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        if: github.event_name == 'push'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ github.run_number }}
-          release_name: Release v${{ github.run_number }}
-          body: |
-            ## SpecCursor Release v${{ github.run_number }}
-
-            ### Changes
-            - Automated dependency upgrades
-            - AI patch generation improvements
-            - Formal verification enhancements
-
-            ### Artifacts
-            - Docker images: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`
-            - SBOM files available in artifacts
-
-            ### Deployment
-            - Staging: ✅ Deployed
-            - Production: ✅ Deployed
-
-            ### Metrics
-            - Build time: ${{ needs.build.result }}
-            - Test coverage: Available in Codecov
-            - Security scan: Passed
-          draft: false
-          prerelease: false
-
-  # Notifications
-  notifications:
-    name: Notifications
-    runs-on: ubuntu-latest
-    needs:
-      [
-        unit-tests,
-        integration-tests,
-        e2e-tests,
-        build,
-        deploy-staging,
-        deploy-production,
-      ]
-    if: always()
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: |
-          npm install -g pnpm@latest
-          pnpm install --frozen-lockfile
-
-      - name: Send Slack notification
-        run: |
-          pnpm scripts/notify-slack.js \
-            --status ${{ needs.unit-tests.result }} \
-            --branch ${{ github.ref_name }} \
-            --commit ${{ github.sha }} \
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      - name: Send email notification
-        if: failure()
-        run: |
-          pnpm scripts/notify-email.js \
-            --status failure \
-            --branch ${{ github.ref_name }} \
-            --commit ${{ github.sha }} \
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-# Required status checks for branch protection
-# These must pass before merging PRs to main/develop
-# Configure in repository settings > Branches > Branch protection rules
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Lake build
+        working-directory: workers/lean-engine
+        run: lake build
