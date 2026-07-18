@@ -1,0 +1,19 @@
+# Pinned Chaos Mesh values for kind (containerd).
+# Chart version is pinned in scripts/local-k8s.mjs (CHAOS_MESH_CHART_VERSION).
+#
+# Install:
+#   helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
+#     --namespace chaos-mesh --create-namespace \
+#     --version 2.8.3 \
+#     -f infrastructure/k8s/chaos-mesh-values.yaml
+
+chaosDaemon:
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock
+
+dashboard:
+  create: true
+  securityMode: false
+
+controllerManager:
+  enableFilterNamespace: false

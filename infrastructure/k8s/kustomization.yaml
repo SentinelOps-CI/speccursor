@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Namespaces are applied separately (speccursor + chaos-testing).
+# Do not set top-level `namespace:` here — it would rewrite chaos-testing.
+resources:
+  - postgres.yaml
+  - redis.yaml
+  - controller.yaml
+  - ai-service.yaml
+  - github-app.yaml
+  - worker.yaml

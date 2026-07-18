@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-app
+  namespace: speccursor
+  labels:
+    app: github-app
+    app.kubernetes.io/name: github-app
+    app.kubernetes.io/part-of: speccursor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: github-app
+  template:
+    metadata:
+      labels:
+        app: github-app
+        app.kubernetes.io/name: github-app
+        app.kubernetes.io/part-of: speccursor
+    spec:
+      containers:
+        - name: github-app
+          image: speccursor-github-app:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3000
+              name: http
+          envFrom:
+            - secretRef:
+                name: speccursor-secrets
+          env:
+            - name: APP_ENV
+              value: staging
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: '3000'
+            - name: DB_SSL
+              value: 'false'
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: '1'
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-app
+  namespace: speccursor
+  labels:
+    app: github-app
+    app.kubernetes.io/part-of: speccursor
+spec:
+  type: NodePort
+  selector:
+    app: github-app
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 30080

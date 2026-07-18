@@ -1,0 +1,31 @@
+# kind cluster for local SpecCursor staging + Chaos Mesh.
+# Create: node scripts/local-k8s.mjs up
+# Requires Docker Desktop (or compatible Engine) + kind + kubectl + helm.
+#
+# Host ports map to NodePort Services in infrastructure/k8s so you can curl
+# readiness from the host while Chaos Mesh StatusChecks use in-cluster DNS.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: speccursor
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 30001
+        hostPort: 3001
+        protocol: TCP
+      - containerPort: 30002
+        hostPort: 3002
+        protocol: TCP
+      - containerPort: 30080
+        hostPort: 3080
+        protocol: TCP
+      - containerPort: 30088
+        hostPort: 8080
+        protocol: TCP

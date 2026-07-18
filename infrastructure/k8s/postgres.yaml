@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: speccursor
+  labels:
+    app: speccursor-postgres
+    app.kubernetes.io/part-of: speccursor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speccursor-postgres
+  template:
+    metadata:
+      labels:
+        app: speccursor-postgres
+        app.kubernetes.io/part-of: speccursor
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: speccursor-secrets
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: speccursor-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: speccursor-secrets
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ['pg_isready', '-U', 'speccursor']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ['pg_isready', '-U', 'speccursor']
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: '1'
+              memory: 1Gi
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: speccursor
+  labels:
+    app: speccursor-postgres
+    app.kubernetes.io/part-of: speccursor
+spec:
+  selector:
+    app: speccursor-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
