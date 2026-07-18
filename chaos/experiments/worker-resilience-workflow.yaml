@@ -1,0 +1,115 @@
+# One-shot staging Workflow: pod failure + continuous /ready abort probe.
+# Prefer this over scheduled cron experiments for gated drills.
+#
+# Override probe URL if your in-cluster Service DNS differs:
+#   controller.speccursor.svc.cluster.local:3001
+#
+# Apply:
+#   kubectl apply -f chaos/experiments/worker-resilience-workflow.yaml
+# Abort / rollback:
+#   kubectl -n chaos-testing delete workflow worker-resilience-drill
+#
+# See docs/chaos.md.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: worker-resilience-drill
+  namespace: chaos-testing
+  labels:
+    app.kubernetes.io/part-of: speccursor
+    chaos.speccursor.io/experiment: worker-resilience-drill
+    chaos.speccursor.io/profile: oneshot
+  annotations:
+    chaos.speccursor.io/steady-state: >-
+      Controller /ready stays HTTP 200 throughout (abortWithStatusCheck);
+      after pod-failure completes, at least one worker Ready and queue depth
+      is non-increasing within 5m.
+    chaos.speccursor.io/abort-if: >-
+      StatusCheck failure threshold exceeded; workflow aborts and deletes
+      embedded chaos automatically.
+    chaos.speccursor.io/rollback: >-
+      kubectl -n chaos-testing delete workflow worker-resilience-drill;
+      kubectl -n speccursor get pods -l app=speccursor-worker
+spec:
+  entry: entry
+  templates:
+    - name: entry
+      templateType: Serial
+      deadline: 10m
+      children:
+        - baseline-ready
+        - inject-and-monitor
+        - post-ready
+
+    - name: baseline-ready
+      templateType: StatusCheck
+      deadline: 60s
+      abortWithStatusCheck: true
+      statusCheck:
+        mode: Continuous
+        type: HTTP
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 1
+        http:
+          url: http://controller.speccursor.svc.cluster.local:3001/ready
+          method: GET
+          criteria:
+            statusCode: '200'
+
+    - name: inject-and-monitor
+      templateType: Parallel
+      deadline: 3m
+      children:
+        - continuous-ready-guard
+        - worker-pod-kill
+
+    - name: continuous-ready-guard
+      templateType: StatusCheck
+      deadline: 150s
+      abortWithStatusCheck: true
+      statusCheck:
+        mode: Continuous
+        type: HTTP
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+        http:
+          url: http://controller.speccursor.svc.cluster.local:3001/ready
+          method: GET
+          criteria:
+            statusCode: '200'
+
+    - name: worker-pod-kill
+      templateType: PodChaos
+      # Chaos Mesh Workflow forbids duration on embedded chaos; use deadline.
+      deadline: 30s
+      podChaos:
+        action: pod-failure
+        mode: one
+        gracePeriod: 0
+        selector:
+          namespaces:
+            - speccursor
+          labelSelectors:
+            app: speccursor-worker
+
+    - name: post-ready
+      templateType: StatusCheck
+      deadline: 90s
+      abortWithStatusCheck: true
+      statusCheck:
+        mode: Continuous
+        type: HTTP
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 2
+        http:
+          url: http://controller.speccursor.svc.cluster.local:3001/ready
+          method: GET
+          criteria:
+            statusCode: '200'
