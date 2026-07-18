@@ -14,7 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Pin below actix-web 4.10+ so builds work on rustc 1.85 (common Docker Desktop rustup).
 actix-web = "=4.9.0"
-actix-rt = "=2.10.0"
+actix-rt = "=2.11.0"
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["macros", "rt"] }
