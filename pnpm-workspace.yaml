@@ -1,13 +1,3 @@
 packages:
-  # Application services
   - 'apps/*'
-
-  # Worker implementations
-  - 'workers/*'
-
-  # Shared packages
   - 'packages/*'
-
-  # Infrastructure and tools
-  - 'infrastructure/*'
-  - 'tools/*'
