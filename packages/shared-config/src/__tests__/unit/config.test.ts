@@ -2,159 +2,64 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { ConfigManager } from '../../index';
 
 describe('ConfigManager', () => {
-  let configManager: ConfigManager;
+  const previous = {
+    APP_ENV: process.env['APP_ENV'],
+    NODE_ENV: process.env['NODE_ENV'],
+    GITHUB_APP_ID: process.env['GITHUB_APP_ID'],
+    REDIS_PASSWORD: process.env['REDIS_PASSWORD'],
+    JAEGER_ENDPOINT: process.env['JAEGER_ENDPOINT'],
+    ANTHROPIC_API_KEY: process.env['ANTHROPIC_API_KEY'],
+    CLAUDE_API_KEY: process.env['CLAUDE_API_KEY'],
+  };
 
   beforeEach(() => {
-    configManager = new ConfigManager();
+    process.env['APP_ENV'] = 'development';
+    process.env['NODE_ENV'] = 'test';
+    delete process.env['GITHUB_APP_ID'];
+    delete process.env['REDIS_PASSWORD'];
+    delete process.env['JAEGER_ENDPOINT'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['CLAUDE_API_KEY'];
   });
 
   afterEach(() => {
-    // Clean up any test configurations
-    configManager.clear();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
-  describe('environment configuration', () => {
-    it('should load default environment configuration', () => {
-      const config = configManager.getEnvironmentConfig();
-
-      expect(config).toBeDefined();
-      expect(config.node).toBeDefined();
-      expect(config.rust).toBeDefined();
-      expect(config.go).toBeDefined();
-      expect(config.python).toBeDefined();
-      expect(config.lean).toBeDefined();
-    });
-
-    it('should validate environment configuration', () => {
-      const config = configManager.getEnvironmentConfig();
-
-      expect(config.node.versions).toContain(18);
-      expect(config.node.versions).toContain(20);
-      expect(config.rust.versions).toContain('1.78');
-      expect(config.rust.versions).toContain('nightly');
-      expect(config.go.versions).toContain('1.22');
-      expect(config.python.versions).toContain('3.12');
-      expect(config.lean.versions).toContain('4.20.0');
-    });
-
-    it('should handle environment overrides', () => {
-      process.env.NODE_VERSION = '20';
-      process.env.RUST_VERSION = '1.78';
-
-      const config = configManager.getEnvironmentConfig();
-
-      expect(config.node.current).toBe('20');
-      expect(config.rust.current).toBe('1.78');
-
-      // Clean up
-      delete process.env.NODE_VERSION;
-      delete process.env.RUST_VERSION;
-    });
+  it('loads and validates default development config', () => {
+    const configManager = new ConfigManager();
+    const app = configManager.getAppConfig();
+    expect(app.port).toBeGreaterThan(0);
+    expect(app.environment).toBe('development');
+    expect(app.database.host).toBeTruthy();
+    expect(app.redis.host).toBeTruthy();
+    expect(app.claude.model).toContain('claude');
   });
 
-  describe('security configuration', () => {
-    it('should load security configuration', () => {
-      const config = configManager.getSecurityConfig();
-
-      expect(config).toBeDefined();
-      expect(config.sandbox).toBeDefined();
-      expect(config.rateLimiting).toBeDefined();
-      expect(config.vulnerabilityScanning).toBeDefined();
-    });
-
-    it('should validate security settings', () => {
-      const config = configManager.getSecurityConfig();
-
-      expect(config.sandbox.enabled).toBe(true);
-      expect(config.rateLimiting.enabled).toBe(true);
-      expect(config.vulnerabilityScanning.enabled).toBe(true);
-      expect(config.sandbox.maxExecutionTime).toBeGreaterThan(0);
-      expect(config.rateLimiting.maxRequestsPerMinute).toBeGreaterThan(0);
-    });
+  it('exposes typed subsystem getters', () => {
+    const configManager = new ConfigManager();
+    expect(configManager.getDatabaseConfig().database).toBeTruthy();
+    expect(configManager.getRedisConfig().port).toBeGreaterThan(0);
+    expect(configManager.getClaudeConfig().maxTokens).toBeGreaterThan(0);
+    expect(configManager.getLeanConfig().version).toBe('4.20.0');
+    expect(configManager.getSecurityConfig().sandboxEnabled).toBeDefined();
+    expect(configManager.getMonitoringConfig().metricsEnabled).toBe(true);
+    expect(configManager.getGitHubConfig().appId).toBeNull();
   });
 
-  describe('observability configuration', () => {
-    it('should load observability configuration', () => {
-      const config = configManager.getObservabilityConfig();
-
-      expect(config).toBeDefined();
-      expect(config.logging).toBeDefined();
-      expect(config.metrics).toBeDefined();
-      expect(config.tracing).toBeDefined();
-    });
-
-    it('should validate observability settings', () => {
-      const config = configManager.getObservabilityConfig();
-
-      expect(config.logging.level).toBeDefined();
-      expect(config.metrics.enabled).toBe(true);
-      expect(config.tracing.enabled).toBe(true);
-      expect(config.logging.format).toBe('json');
-    });
+  it('prefers ANTHROPIC_API_KEY for Claude config', () => {
+    process.env['ANTHROPIC_API_KEY'] = 'sk-from-anthropic';
+    const mgr = new ConfigManager();
+    expect(mgr.getClaudeConfig().apiKey).toBe('sk-from-anthropic');
   });
 
-  describe('AI configuration', () => {
-    it('should load AI configuration', () => {
-      const config = configManager.getAIConfig();
-
-      expect(config).toBeDefined();
-      expect(config.claude).toBeDefined();
-      expect(config.prompting).toBeDefined();
-    });
-
-    it('should validate AI settings', () => {
-      const config = configManager.getAIConfig();
-
-      expect(config.claude.model).toBeDefined();
-      expect(config.claude.maxTokens).toBeGreaterThan(0);
-      expect(config.prompting.maxRetries).toBeGreaterThan(0);
-    });
-  });
-
-  describe('database configuration', () => {
-    it('should load database configuration', () => {
-      const config = configManager.getDatabaseConfig();
-
-      expect(config).toBeDefined();
-      expect(config.postgres).toBeDefined();
-      expect(config.redis).toBeDefined();
-    });
-
-    it('should validate database settings', () => {
-      const config = configManager.getDatabaseConfig();
-
-      expect(config.postgres.host).toBeDefined();
-      expect(config.postgres.port).toBeGreaterThan(0);
-      expect(config.redis.host).toBeDefined();
-      expect(config.redis.port).toBeGreaterThan(0);
-    });
-  });
-
-  describe('validation', () => {
-    it('should validate all configurations', () => {
-      const isValid = configManager.validateAll();
-      expect(isValid).toBe(true);
-    });
-
-    it('should handle invalid configurations', () => {
-      // Mock invalid configuration
-      const originalConfig = configManager.getEnvironmentConfig();
-      configManager.setEnvironmentConfig({
-        ...originalConfig,
-        node: { versions: [] },
-      });
-
-      const isValid = configManager.validateAll();
-      expect(isValid).toBe(false);
-    });
-  });
-
-  describe('reloading', () => {
-    it('should reload configurations', () => {
-      const originalConfig = configManager.getEnvironmentConfig();
-      const reloadedConfig = configManager.reload();
-
-      expect(reloadedConfig).toEqual(originalConfig);
-    });
+  it('reports environment helpers', () => {
+    const configManager = new ConfigManager();
+    expect(configManager.isDevelopment()).toBe(true);
+    expect(configManager.isProduction()).toBe(false);
+    expect(configManager.isStaging()).toBe(false);
   });
 });

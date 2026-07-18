@@ -11,6 +11,7 @@ import {
   SecurityConfig,
   MonitoringConfig,
 } from '@speccursor/shared-types';
+import { resolveAnthropicApiKey } from './secrets';
 
 // ============================================================================
 // Environment Loading
@@ -23,6 +24,25 @@ export function loadEnvironment(): void {
     console.warn('No .env file found, using environment variables');
   } else {
     dotenvExpand.expand(env);
+  }
+
+  // APP_ENV is the SpecCursor deploy profile; NODE_ENV stays Node semantics.
+  if (!process.env['APP_ENV']) {
+    const nodeEnv = (process.env['NODE_ENV'] || '').toLowerCase();
+    if (
+      nodeEnv === 'development' ||
+      nodeEnv === 'staging' ||
+      nodeEnv === 'production'
+    ) {
+      process.env['APP_ENV'] = nodeEnv;
+    } else {
+      process.env['APP_ENV'] = 'development';
+    }
+  }
+
+  // Prefer canonical Anthropic env for convict's claude.apiKey field.
+  if (!process.env['CLAUDE_API_KEY'] && process.env['ANTHROPIC_API_KEY']) {
+    process.env['CLAUDE_API_KEY'] = process.env['ANTHROPIC_API_KEY'];
   }
 }
 
@@ -40,10 +60,10 @@ export const configSchema = convict({
       env: 'PORT',
     },
     environment: {
-      doc: 'The application environment',
+      doc: 'Deploy profile (development | staging | production)',
       format: ['development', 'staging', 'production'],
       default: 'development',
-      env: 'NODE_ENV',
+      env: 'APP_ENV',
     },
     logLevel: {
       doc: 'The logging level',
@@ -123,7 +143,7 @@ export const configSchema = convict({
     password: {
       doc: 'Redis password',
       format: String,
-      default: null,
+      default: '',
       sensitive: true,
       env: 'REDIS_PASSWORD',
     },
@@ -144,7 +164,7 @@ export const configSchema = convict({
   // Claude AI
   claude: {
     apiKey: {
-      doc: 'Claude API key',
+      doc: 'Anthropic API key (set ANTHROPIC_API_KEY; CLAUDE_API_KEY is alias)',
       format: String,
       default: '',
       sensitive: true,
@@ -153,7 +173,7 @@ export const configSchema = convict({
     model: {
       doc: 'Claude model to use',
       format: String,
-      default: 'claude-3-sonnet-20240229',
+      default: 'claude-sonnet-4-20250514',
       env: 'CLAUDE_MODEL',
     },
     maxTokens: {
@@ -231,9 +251,9 @@ export const configSchema = convict({
       env: 'ALLOWED_COMMANDS',
     },
     jwtSecret: {
-      doc: 'JWT secret for token signing',
+      doc: 'JWT secret for token signing (required in staging/production)',
       format: String,
-      default: 'your-secret-key',
+      default: '',
       sensitive: true,
       env: 'JWT_SECRET',
     },
@@ -269,7 +289,7 @@ export const configSchema = convict({
     jaegerEndpoint: {
       doc: 'Jaeger tracing endpoint',
       format: String,
-      default: null,
+      default: '',
       env: 'JAEGER_ENDPOINT',
     },
   },
@@ -278,7 +298,13 @@ export const configSchema = convict({
   github: {
     appId: {
       doc: 'GitHub App ID',
-      format: 'int',
+      format: (val: unknown) => {
+        if (val === null || val === undefined || val === '') return;
+        const n = typeof val === 'number' ? val : Number(val);
+        if (!Number.isInteger(n) || n <= 0) {
+          throw new Error('must be a positive integer when set');
+        }
+      },
       default: null,
       env: 'GITHUB_APP_ID',
     },
@@ -322,12 +348,12 @@ export const configValidationSchema = z.object({
   redis: z.object({
     host: z.string().min(1),
     port: z.number().min(1).max(65535),
-    password: z.string().nullable(),
+    password: z.string().nullable().or(z.literal('')),
     db: z.number().min(0).max(15),
     keyPrefix: z.string(),
   }),
   claude: z.object({
-    apiKey: z.string().min(1),
+    apiKey: z.string(), // empty allowed at boot
     model: z.string().min(1),
     maxTokens: z.number().min(1).max(100000),
     temperature: z.number().min(0).max(2),
@@ -344,14 +370,14 @@ export const configValidationSchema = z.object({
     maxExecutionTime: z.number().min(1).max(3600),
     memoryLimit: z.string().min(1),
     allowedCommands: z.array(z.string()),
-    jwtSecret: z.string().min(1),
-    webhookSecret: z.string().min(1),
+    jwtSecret: z.string(), // empty allowed locally; assertServiceSecrets in deploy
+    webhookSecret: z.string(), // empty allowed locally
   }),
   monitoring: z.object({
     metricsEnabled: z.boolean(),
     tracingEnabled: z.boolean(),
     prometheusPort: z.number().min(1).max(65535),
-    jaegerEndpoint: z.string().nullable(),
+    jaegerEndpoint: z.string().nullable().or(z.literal('')),
   }),
   github: z.object({
     appId: z.number().nullable(),
@@ -365,7 +391,8 @@ export const configValidationSchema = z.object({
 // ============================================================================
 
 export class ConfigManager {
-  private config: convict.Config<any>;
+  // Convict's deep generics blow the TS instantiation limit; keep runtime typed via Zod.
+  private config: any;
   private validated: boolean = false;
 
   constructor() {
@@ -397,16 +424,19 @@ export class ConfigManager {
       throw new Error('Configuration not validated');
     }
 
-    const db = this.config.get('database');
-    const redis = this.config.get('redis');
-    const claude = this.config.get('claude');
-    const lean = this.config.get('lean');
-    const security = this.config.get('security');
-    const monitoring = this.config.get('monitoring');
+    // Convict generics can explode TS instantiation depth; read via properties bag.
+    const props = this.config.getProperties() as Record<string, any>;
+    const db = props.database;
+    const redis = props.redis;
+    const claude = props.claude;
+    const lean = props.lean;
+    const security = props.security;
+    const monitoring = props.monitoring;
+    const app = props.app;
 
     return {
-      port: this.config.get('app.port'),
-      environment: this.config.get('app.environment'),
+      port: app.port,
+      environment: app.environment,
       database: {
         host: db.host,
         port: db.port,
@@ -446,7 +476,7 @@ export class ConfigManager {
       monitoring: {
         metricsEnabled: monitoring.metricsEnabled,
         tracingEnabled: monitoring.tracingEnabled,
-        logLevel: this.config.get('app.logLevel'),
+        logLevel: app.logLevel,
         prometheusPort: monitoring.prometheusPort,
         jaegerEndpoint: monitoring.jaegerEndpoint || undefined,
       },
@@ -480,8 +510,9 @@ export class ConfigManager {
 
   getClaudeConfig(): ClaudeConfig {
     const claude = this.config.get('claude');
+    const apiKey = resolveAnthropicApiKey() || (claude.apiKey as string) || '';
     return {
-      apiKey: claude.apiKey,
+      apiKey,
       model: claude.model,
       maxTokens: claude.maxTokens,
       temperature: claude.temperature,
@@ -521,7 +552,17 @@ export class ConfigManager {
   }
 
   getGitHubConfig() {
-    return this.config.get('github');
+    const github = this.config.get('github');
+    const rawId = github.appId;
+    const appId =
+      rawId === null || rawId === undefined || rawId === ''
+        ? null
+        : Number(rawId);
+    return {
+      appId: Number.isFinite(appId) && appId! > 0 ? appId : null,
+      privateKey: github.privateKey || '',
+      webhookSecret: github.webhookSecret || '',
+    };
   }
 
   get(key: string): any {
@@ -573,7 +614,7 @@ export function getEnvironmentConfig(): Record<string, any> {
     },
     claude: {
       apiKey: '',
-      model: 'claude-3-sonnet-20240229',
+      model: 'claude-sonnet-4-20250514',
       maxTokens: 4096,
       temperature: 0.1,
       timeout: 30000,
@@ -589,14 +630,14 @@ export function getEnvironmentConfig(): Record<string, any> {
       maxExecutionTime: 600,
       memoryLimit: '2GB',
       allowedCommands: [],
-      jwtSecret: 'your-secret-key',
+      jwtSecret: '',
       webhookSecret: '',
     },
     monitoring: {
       metricsEnabled: true,
       tracingEnabled: true,
       prometheusPort: 9090,
-      jaegerEndpoint: null,
+      jaegerEndpoint: '',
     },
     github: {
       appId: null,
@@ -698,6 +739,21 @@ export function getServiceConfig(serviceName: string): Record<string, any> {
     version: process.env.npm_package_version || '0.1.0',
   };
 }
+
+export {
+  FORBIDDEN_SECRET_PLACEHOLDERS,
+  MissingSecretsError,
+  assertServiceSecrets,
+  isBlank,
+  isDeployedEnvironment,
+  isForbiddenPlaceholder,
+  isUsableSecret,
+  listMissingOptionalDevSecrets,
+  requiredSecretsForService,
+  resolveAnthropicApiKey,
+  resolveRuntimeEnvironment,
+} from './secrets';
+export type { RuntimeEnvironment, SpecCursorService } from './secrets';
 
 // ============================================================================
 // Default Export
