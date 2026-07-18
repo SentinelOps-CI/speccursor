@@ -1,0 +1,162 @@
+# Staging overlay — control-plane services on top of local infra compose.
+# Usage (via scripts/deploy.mjs or manually):
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file .env.staging up -d --build
+#
+# Requires .env.staging with real secrets (see .env.staging.example).
+# Does not provision cloud accounts; runs on the local Docker host as a staging profile.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.staging}
+      POSTGRES_USER: ${POSTGRES_USER:-speccursor}
+      POSTGRES_DB: ${POSTGRES_DB:-speccursor}
+    ports:
+      - '127.0.0.1:${POSTGRES_PUBLISH_PORT:-5432}:5432'
+
+  redis:
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.staging}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.staging}
+    ports:
+      - '127.0.0.1:${REDIS_PUBLISH_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Avoid port clash with github-app (host 3080). Enable with --profile observability.
+  grafana:
+    profiles: ['observability']
+  prometheus:
+    profiles: ['observability']
+  loki:
+    profiles: ['observability']
+  jaeger:
+    profiles: ['observability']
+  mailhog:
+    profiles: ['devtools']
+  lean-dev:
+    profiles: ['devtools']
+
+  controller:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: controller
+    image: speccursor-controller:${IMAGE_TAG:-staging}
+    container_name: speccursor-controller-staging
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '${CONTROLLER_PORT:-3001}:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    networks:
+      - default
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: ai-service
+    image: speccursor-ai-service:${IMAGE_TAG:-staging}
+    container_name: speccursor-ai-service-staging
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      PORT: 3002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '${AI_SERVICE_PORT:-3002}:3002'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    networks:
+      - default
+
+  github-app:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.service
+      args:
+        SERVICE: github-app
+    image: speccursor-github-app:${IMAGE_TAG:-staging}
+    container_name: speccursor-github-app-staging
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-speccursor}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-speccursor}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DB_SSL: ${DB_SSL:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '${GITHUB_APP_PORT:-3080}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    networks:
+      - default
