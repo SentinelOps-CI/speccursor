@@ -7,5 +7,4 @@ pnpm lint-staged
 # Run type checking
 pnpm tsc --noEmit
 
-# Run security audit
-pnpm security:audit 
+# Dependency audits run in CI (qualify); local hook stays fast and avoids blocking on transitive advisories.
