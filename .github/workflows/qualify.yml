@@ -1,4 +1,4 @@
-﻿name: SpecCursor Quality Gates
+name: SpecCursor Quality Gates
 
 # Honest qualification suite aligned to repository reality.
 # What exists today: Node apps/packages (pnpm), optional Rust worker,
@@ -149,7 +149,7 @@ jobs:
 
       - name: Setup Rust toolchain
         if: hashFiles('workers/rust-worker/Cargo.toml') != ''
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           toolchain: stable
           components: clippy
