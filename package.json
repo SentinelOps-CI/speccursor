@@ -49,8 +49,8 @@
     "prepare": "husky install"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
-    "diff": "^5.1.0"
+    "@anthropic-ai/sdk": "^0.126.0",
+    "diff": "^9.0.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.1",
